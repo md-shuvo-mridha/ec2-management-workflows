@@ -1,0 +1,33 @@
+name: 01 - EC2 Connectivity & Metadata
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse hosts
+        id: hosts
+        run: |
+          chmod +x scripts/runner/parse_hosts.sh
+          scripts/runner/parse_hosts.sh "${{ secrets.EC2_HOSTS }}" > /tmp/hosts.txt
+          echo "Hosts:"
+          cat /tmp/hosts.txt
+
+      - name: Connectivity check + basic info
+        env:
+          EC2_HOSTS: ${{ secrets.EC2_HOSTS }}
+          EC2_USER:  ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_PORT:  ${{ secrets.EC2_PORT }}
+        run: |
+          chmod +x scripts/runner/ssh_exec.sh scripts/runner/parse_hosts.sh
+          while read -r h; do
+            echo "=== ${h} ==="
+            scripts/runner/ssh_exec.sh "${h}" "uname -a; uptime; id; hostname; date -Is; curl -s -m 2 http://169.254.169.254/latest/meta-data/instance-id || true"
+          done < /tmp/hosts.txt

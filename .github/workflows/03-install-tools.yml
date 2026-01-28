@@ -1,0 +1,41 @@
+name: 03 - Install Ops Tools
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  install-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build remote bundle
+        run: |
+          mkdir -p /tmp/ec2mw
+          cp -r scripts/remote /tmp/ec2mw/
+          tar -czf /tmp/ec2mw.tgz -C /tmp ec2mw
+
+      - name: Install tools on all hosts
+        env:
+          EC2_HOSTS: ${{ secrets.EC2_HOSTS }}
+          EC2_USER:  ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_PORT:  ${{ secrets.EC2_PORT }}
+        run: |
+          chmod +x scripts/runner/ssh_exec.sh scripts/runner/parse_hosts.sh
+          scripts/runner/parse_hosts.sh "${EC2_HOSTS}" > /tmp/hosts.txt
+
+          base64 /tmp/ec2mw.tgz > /tmp/ec2mw.tgz.b64
+
+          while read -r h; do
+            echo "=== ${h} ==="
+            scripts/runner/ssh_exec.sh "${h}" "sudo bash -lc 'mkdir -p /tmp/ec2mw && cat > /tmp/ec2mw.tgz.b64' " < /tmp/ec2mw.tgz.b64
+            scripts/runner/ssh_exec.sh "${h}" "sudo bash -lc 'base64 -d /tmp/ec2mw.tgz.b64 > /tmp/ec2mw.tgz && tar -xzf /tmp/ec2mw.tgz -C /tmp && chmod +x /tmp/ec2mw/remote/*.sh'"
+
+            os_vars="$(scripts/runner/ssh_exec.sh "${h}" "sudo bash -lc 'cp /tmp/ec2mw/remote/lib.sh /tmp/ec2mw/lib.sh; /tmp/ec2mw/remote/detect_os.sh'")"
+            echo "${os_vars}"
+            OS_FAMILY="$(echo "${os_vars}" | awk -F= '/^OS_FAMILY=/{print $2}')"
+            PKG_MGR="$(echo "${os_vars}" | awk -F= '/^PKG_MGR=/{print $2}')"
+
+            scripts/runner/ssh_exec.sh "${h}" "sudo bash -lc 'cp /tmp/ec2mw/remote/lib.sh /tmp/ec2mw/lib.sh; /tmp/ec2mw/remote/install_tools.sh ${OS_FAMILY} ${PKG_MGR}'"
+          done < /tmp/hosts.txt
