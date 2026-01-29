@@ -24,7 +24,8 @@ jobs:
   hostcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Build remote bundle
         run: |
@@ -37,9 +38,9 @@ jobs:
       - name: Upload remote bundle to all hosts
         env:
           EC2_HOSTS: ${{ secrets.EC2_HOSTS }}
-          EC2_USER:  ${{ secrets.EC2_USER }}
+          EC2_USER: ${{ secrets.EC2_USER }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_PORT:  ${{ secrets.EC2_PORT }}
+          EC2_PORT: ${{ secrets.EC2_PORT }}
         run: |
           set -euo pipefail
           chmod +x scripts/runner/ssh_exec.sh scripts/runner/parse_hosts.sh
@@ -54,9 +55,9 @@ jobs:
       - name: Apply per-host hostname + managed hosts + DNS checks
         env:
           EC2_HOSTS: ${{ secrets.EC2_HOSTS }}
-          EC2_USER:  ${{ secrets.EC2_USER }}
+          EC2_USER: ${{ secrets.EC2_USER }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_PORT:  ${{ secrets.EC2_PORT }}
+          EC2_PORT: ${{ secrets.EC2_PORT }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           set -euo pipefail
@@ -101,32 +102,30 @@ jobs:
           echo "OK=${ok}" > artifacts/summary.env
           echo "FAIL=${fail}" >> artifacts/summary.env
 
-          # Slack notify (optional): only if webhook secret exists
+          # Slack notify (optional)
           if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
-            source artifacts/summary.env
             status="SUCCESS"
             color="good"
-            if [[ "${FAIL}" != "0" ]]; then
+            if [[ "${fail}" -gt 0 ]]; then
               status="FAIL"
               color="danger"
             fi
 
-            payload=$(cat <<JSON
-{
-  "text": "*EC2 Management – Hostname/DNS Check* (${status})",
-  "attachments": [
-    {
-      "color": "${color}",
-      "fields": [
-        { "title": "Success", "value": "${OK}", "short": true },
-        { "title": "Failed",  "value": "${FAIL}", "short": true },
-        { "title": "Dry run", "value": "${DRY_RUN}", "short": true }
-      ]
-    }
-  ]
-}
-JSON
-)
+            payload="$(python3 - <<PY
+import json
+print(json.dumps({
+  "text": f"*EC2 Management – Hostname/DNS Check* ({status})",
+  "attachments": [{
+    "color": "${color}",
+    "fields": [
+      {"title": "Success", "value": str(${ok}), "short": True},
+      {"title": "Failed",  "value": str(${fail}), "short": True},
+      {"title": "Dry run", "value": "${DRY_RUN}", "short": True}
+    ]
+  }]
+}))
+PY
+)"
             curl -s -X POST -H 'Content-Type: application/json' --data "${payload}" "${SLACK_WEBHOOK_URL}" >/dev/null || true
           fi
 
