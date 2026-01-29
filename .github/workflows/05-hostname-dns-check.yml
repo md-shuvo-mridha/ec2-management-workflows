@@ -105,28 +105,13 @@ jobs:
           # Slack notify (optional)
           if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
             status="SUCCESS"
-            color="good"
             if [[ "${fail}" -gt 0 ]]; then
               status="FAIL"
-              color="danger"
             fi
-
-            payload="$(python3 - <<PY
-import json
-print(json.dumps({
-  "text": f"*EC2 Management – Hostname/DNS Check* ({status})",
-  "attachments": [{
-    "color": "${color}",
-    "fields": [
-      {"title": "Success", "value": str(${ok}), "short": True},
-      {"title": "Failed",  "value": str(${fail}), "short": True},
-      {"title": "Dry run", "value": "${DRY_RUN}", "short": True}
-    ]
-  }]
-}))
-PY
-)"
-            curl -s -X POST -H 'Content-Type: application/json' --data "${payload}" "${SLACK_WEBHOOK_URL}" >/dev/null || true
+            msg="EC2 Management – Hostname/DNS Check (${status}) | Success=${ok} Failed=${fail} DryRun=${DRY_RUN}"
+            curl -s -X POST -H 'Content-Type: application/json' \
+              --data "{\"text\":\"${msg}\"}" \
+              "${SLACK_WEBHOOK_URL}" >/dev/null || true
           fi
 
       - name: Upload reports
