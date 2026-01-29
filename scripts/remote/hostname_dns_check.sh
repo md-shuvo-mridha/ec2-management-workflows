@@ -177,12 +177,11 @@ fi
 final_hostname="$(hostname)"
 log "Final hostname: ${final_hostname}"
 
-# Collect results as newline-separated strings (safe, no bash array -> python issues)
+# Collect results as newline-separated strings (safe)
 resolve_lines=""
 ping_lines=""
 tcp_lines=""
 
-# DNS resolve + ping
 if [[ -n "${dns_names}" ]]; then
   IFS=',' read -r -a names <<< "${dns_names}"
   for name in "${names[@]}"; do
@@ -201,7 +200,6 @@ if [[ -n "${dns_names}" ]]; then
   done
 fi
 
-# TCP checks
 if [[ -n "${tcp_targets}" ]]; then
   IFS=',' read -r -a tgs <<< "${tcp_targets}"
   for t in "${tgs[@]}"; do
@@ -213,21 +211,37 @@ if [[ -n "${tcp_targets}" ]]; then
   done
 fi
 
-# JSON output (simple + safe)
+# Pass values to Python via environment (NO ${...} inside heredoc)
+export EC2MW_TIME="${now}"
+export EC2MW_OS="${os_pretty}"
+export EC2MW_CURRENT_HOSTNAME="${current_hostname}"
+export EC2MW_FINAL_HOSTNAME="${final_hostname}"
+export EC2MW_CHANGED_HOSTNAME="${changed_hostname}"
+export EC2MW_CHANGED_HOSTS="${changed_hosts}"
+export EC2MW_DRY_RUN="${dry_run}"
+export EC2MW_RESOLVE_LINES="${resolve_lines}"
+export EC2MW_PING_LINES="${ping_lines}"
+export EC2MW_TCP_LINES="${tcp_lines}"
+
 echo "JSON_BEGIN"
-python3 - <<PY
-import json
+python3 - <<'PY'
+import os, json
+
+def lines_to_list(s: str):
+    s = (s or "").strip()
+    return s.splitlines() if s else []
+
 data = {
-  "time": ${json.dumps(now)},
-  "os": ${json.dumps(os_pretty)},
-  "current_hostname": ${json.dumps(current_hostname)},
-  "final_hostname": ${json.dumps(final_hostname)},
-  "changed_hostname": ${json.dumps(changed_hostname)},
-  "changed_hosts": ${json.dumps(changed_hosts)},
-  "dry_run": ${json.dumps(dry_run)},
-  "resolve_results": ${json.dumps(resolve_lines.strip().splitlines() if resolve_lines.strip() else [])},
-  "ping_results": ${json.dumps(ping_lines.strip().splitlines() if ping_lines.strip() else [])},
-  "tcp_results": ${json.dumps(tcp_lines.strip().splitlines() if tcp_lines.strip() else [])},
+  "time": os.environ.get("EC2MW_TIME",""),
+  "os": os.environ.get("EC2MW_OS",""),
+  "current_hostname": os.environ.get("EC2MW_CURRENT_HOSTNAME",""),
+  "final_hostname": os.environ.get("EC2MW_FINAL_HOSTNAME",""),
+  "changed_hostname": os.environ.get("EC2MW_CHANGED_HOSTNAME",""),
+  "changed_hosts": os.environ.get("EC2MW_CHANGED_HOSTS",""),
+  "dry_run": os.environ.get("EC2MW_DRY_RUN",""),
+  "resolve_results": lines_to_list(os.environ.get("EC2MW_RESOLVE_LINES","")),
+  "ping_results": lines_to_list(os.environ.get("EC2MW_PING_LINES","")),
+  "tcp_results": lines_to_list(os.environ.get("EC2MW_TCP_LINES","")),
 }
 print(json.dumps(data, indent=2))
 PY
