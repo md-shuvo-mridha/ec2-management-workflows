@@ -1,6 +1,6 @@
 # format: host_identifier hostname
 # host_identifier must match exactly what you put in EC2_HOSTS secret
 103.134.70.17        cdn-node-01
-103.51.128.28       vps-103-51-128-28-shuvo
+103.51.128.28   vps-103-51-128-28
 # example:
 # testvm.local       testvm-node-01
