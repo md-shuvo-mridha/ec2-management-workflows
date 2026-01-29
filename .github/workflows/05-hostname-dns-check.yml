@@ -75,7 +75,7 @@ jobs:
           fail=0
 
           while read -r h; do
-            hn="$(awk -v h="$h" '$1==h {print $2}' "${HOST_MAP}")"
+            hn="$(awk -v h="$h" '$1==h {print $2}' "${HOST_MAP}" | tr -d '\r' | xargs)"
 
             if [[ -z "${hn}" ]]; then
               echo "ERROR: No hostname mapping for host: ${h} in ${HOST_MAP}"

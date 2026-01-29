@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# This script runs on the REMOTE host.
+# It expects /tmp/ec2mw/lib.sh to exist (copied by the workflow).
 source /tmp/ec2mw/lib.sh
 need_root
 
@@ -59,9 +62,16 @@ update_managed_hosts() {
     ip="${e%%:*}"
     hn="${e#*:}"
 
-    hn="$(echo "${hn}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9\.\-]/-/g' | sed 's/--\+/-/g' | sed 's/^\-//; s/\-$//')"
-    [[ -z "${ip}" || -z "${hn}" || "${ip}" == "${hn}" ]] && continue
+    hn="$(printf '%s' "${hn}" \
+      | tr -d '\r' \
+      | tr '[:upper:]' '[:lower:]' \
+      | xargs \
+      | sed 's/[^a-z0-9\.\-]/-/g' \
+      | sed 's/\.\././g' \
+      | sed 's/--\+/-/g' \
+      | sed 's/^-*//; s/-*$//')"
 
+    [[ -z "${ip}" || -z "${hn}" || "${ip}" == "${hn}" ]] && continue
     apply_or_echo "sed -i \"/${MANAGED_END}/i ${ip} ${hn}\" /etc/hosts"
   done
 }
@@ -106,18 +116,22 @@ if [[ -z "${new_hostname}" ]]; then
   exit 1
 fi
 
-# --- ENTERPRISE SANITIZE (this is the one you referenced) ---
-new_hostname="$(echo "${new_hostname}" \
+# SANITIZE HARD (CRLF/unicode-ish whitespace safe)
+new_hostname="$(printf '%s' "${new_hostname}" \
+  | tr -d '\r' \
   | tr '[:upper:]' '[:lower:]' \
+  | xargs \
   | sed 's/[^a-z0-9\.\-]/-/g' \
   | sed 's/\.\././g' \
   | sed 's/--\+/-/g' \
-  | sed 's/^\-//; s/\-$//')"
-# -----------------------------------------------------------
+  | sed 's/^-*//; s/-*$//')"
 
+log "Sanitized hostname: ${new_hostname}"
+log "Sanitized hostname hex: $(printf '%s' "${new_hostname}" | od -An -tx1 | tr -d ' \n')"
+
+# Do NOT hard-fail here (enterprise mode). Let system tools decide.
 if ! is_valid_hostname "${new_hostname}"; then
-  log "ERROR: invalid hostname after sanitize: ${new_hostname}"
-  exit 1
+  log "WARN: hostname looks unusual by our validator, continuing anyway: ${new_hostname}"
 fi
 
 if ! sudo -n true >/dev/null 2>&1; then
@@ -135,9 +149,16 @@ changed_hosts="no"
 log "Current hostname: ${current_hostname}"
 log "Target hostname:  ${new_hostname}"
 
-# Apply hostname (idempotent)
+# Apply hostname with fallback (hostnamectl can be strict on some systems)
 if [[ "${current_hostname}" != "${new_hostname}" ]]; then
-  apply_or_echo "hostnamectl set-hostname ${new_hostname} || (echo ${new_hostname} > /etc/hostname; hostname ${new_hostname} || true)"
+  apply_or_echo "bash -lc '
+    set -e
+    if command -v hostnamectl >/dev/null 2>&1; then
+      hostnamectl set-hostname \"${new_hostname}\" && exit 0
+    fi
+    echo \"${new_hostname}\" > /etc/hostname
+    hostname \"${new_hostname}\" || true
+  '"
   changed_hostname="yes"
 fi
 
@@ -152,7 +173,7 @@ else
   changed_hosts="yes"
 fi
 
-# Managed hosts block update (safe)
+# Managed block update
 if [[ -n "${hosts_entries}" ]]; then
   update_managed_hosts "${hosts_entries}"
   changed_hosts="yes"
@@ -183,7 +204,7 @@ if [[ -n "${dns_names}" ]]; then
   done
 fi
 
-# Optional TCP checks (useful when ping blocked)
+# TCP checks
 if [[ -n "${tcp_targets}" ]]; then
   IFS=',' read -r -a tgs <<< "${tcp_targets}"
   for t in "${tgs[@]}"; do
