@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This script runs on the REMOTE host.
-# It expects /tmp/ec2mw/lib.sh to exist (copied by the workflow).
 source /tmp/ec2mw/lib.sh
 need_root
 
@@ -51,8 +49,6 @@ update_managed_hosts() {
   [[ -z "$entries" ]] && return 0
 
   ensure_managed_block
-
-  # wipe content inside block (keep markers)
   apply_or_echo "sed -i '/${MANAGED_BEGIN}/,/${MANAGED_END}/{//!d}' /etc/hosts"
 
   IFS=',' read -r -a arr <<< "$entries"
@@ -116,7 +112,7 @@ if [[ -z "${new_hostname}" ]]; then
   exit 1
 fi
 
-# SANITIZE HARD (CRLF/unicode-ish whitespace safe)
+# SANITIZE HARD
 new_hostname="$(printf '%s' "${new_hostname}" \
   | tr -d '\r' \
   | tr '[:upper:]' '[:lower:]' \
@@ -129,7 +125,6 @@ new_hostname="$(printf '%s' "${new_hostname}" \
 log "Sanitized hostname: ${new_hostname}"
 log "Sanitized hostname hex: $(printf '%s' "${new_hostname}" | od -An -tx1 | tr -d ' \n')"
 
-# Do NOT hard-fail here (enterprise mode). Let system tools decide.
 if ! is_valid_hostname "${new_hostname}"; then
   log "WARN: hostname looks unusual by our validator, continuing anyway: ${new_hostname}"
 fi
@@ -149,7 +144,7 @@ changed_hosts="no"
 log "Current hostname: ${current_hostname}"
 log "Target hostname:  ${new_hostname}"
 
-# Apply hostname with fallback (hostnamectl can be strict on some systems)
+# Apply hostname with fallback
 if [[ "${current_hostname}" != "${new_hostname}" ]]; then
   apply_or_echo "bash -lc '
     set -e
@@ -182,9 +177,10 @@ fi
 final_hostname="$(hostname)"
 log "Final hostname: ${final_hostname}"
 
-resolve_results=()
-ping_results=()
-tcp_results=()
+# Collect results as newline-separated strings (safe, no bash array -> python issues)
+resolve_lines=""
+ping_lines=""
+tcp_lines=""
 
 # DNS resolve + ping
 if [[ -n "${dns_names}" ]]; then
@@ -196,8 +192,9 @@ if [[ -n "${dns_names}" ]]; then
     r="$(check_resolve "${name}")"
     p="$(check_ping "${name}")"
 
-    resolve_results+=("${name}=$(echo "${r}" | tr '\n' ' ' | xargs)")
-    ping_results+=("${name}=${p}")
+    r_one="$(echo "${r}" | tr '\n' ' ' | xargs)"
+    resolve_lines+="${name}=${r_one:-<no result>}"$'\n'
+    ping_lines+="${name}=${p}"$'\n'
 
     log "DNS: ${name} -> ${r:-<no result>}"
     log "PING: ${name} -> ${p}"
@@ -211,25 +208,26 @@ if [[ -n "${tcp_targets}" ]]; then
     t="$(echo "${t}" | xargs)" || true
     [[ -z "${t}" ]] && continue
     s="$(check_tcp "${t}")"
-    tcp_results+=("${t}=${s}")
+    tcp_lines+="${t}=${s}"$'\n'
     log "TCP: ${t} -> ${s}"
   done
 fi
 
+# JSON output (simple + safe)
 echo "JSON_BEGIN"
 python3 - <<PY
 import json
 data = {
-  "time": "${now}",
-  "os": "${os_pretty}",
-  "current_hostname": "${current_hostname}",
-  "final_hostname": "${final_hostname}",
-  "changed_hostname": "${changed_hostname}",
-  "changed_hosts": "${changed_hosts}",
-  "dry_run": "${dry_run}",
-  "resolve_results": ${json.dumps(resolve_results)},
-  "ping_results": ${json.dumps(ping_results)},
-  "tcp_results": ${json.dumps(tcp_results)},
+  "time": ${json.dumps(now)},
+  "os": ${json.dumps(os_pretty)},
+  "current_hostname": ${json.dumps(current_hostname)},
+  "final_hostname": ${json.dumps(final_hostname)},
+  "changed_hostname": ${json.dumps(changed_hostname)},
+  "changed_hosts": ${json.dumps(changed_hosts)},
+  "dry_run": ${json.dumps(dry_run)},
+  "resolve_results": ${json.dumps(resolve_lines.strip().splitlines() if resolve_lines.strip() else [])},
+  "ping_results": ${json.dumps(ping_lines.strip().splitlines() if ping_lines.strip() else [])},
+  "tcp_results": ${json.dumps(tcp_lines.strip().splitlines() if tcp_lines.strip() else [])},
 }
 print(json.dumps(data, indent=2))
 PY
