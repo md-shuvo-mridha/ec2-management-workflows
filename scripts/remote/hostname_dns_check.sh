@@ -49,7 +49,7 @@ update_managed_hosts() {
 
   ensure_managed_block
 
-  # wipe old content inside managed block, keep markers
+  # wipe content inside block (keep markers)
   apply_or_echo "sed -i '/${MANAGED_BEGIN}/,/${MANAGED_END}/{//!d}' /etc/hosts"
 
   IFS=',' read -r -a arr <<< "$entries"
@@ -58,7 +58,8 @@ update_managed_hosts() {
     [[ -z "${e}" ]] && continue
     ip="${e%%:*}"
     hn="${e#*:}"
-    hn="$(echo "${hn}" | tr '[:upper:]' '[:lower:]')"
+
+    hn="$(echo "${hn}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9\.\-]/-/g' | sed 's/--\+/-/g' | sed 's/^\-//; s/\-$//')"
     [[ -z "${ip}" || -z "${hn}" || "${ip}" == "${hn}" ]] && continue
 
     apply_or_echo "sed -i \"/${MANAGED_END}/i ${ip} ${hn}\" /etc/hosts"
@@ -105,9 +106,17 @@ if [[ -z "${new_hostname}" ]]; then
   exit 1
 fi
 
-new_hostname="$(echo "${new_hostname}" | tr '[:upper:]' '[:lower:]')"
+# --- ENTERPRISE SANITIZE (this is the one you referenced) ---
+new_hostname="$(echo "${new_hostname}" \
+  | tr '[:upper:]' '[:lower:]' \
+  | sed 's/[^a-z0-9\.\-]/-/g' \
+  | sed 's/\.\././g' \
+  | sed 's/--\+/-/g' \
+  | sed 's/^\-//; s/\-$//')"
+# -----------------------------------------------------------
+
 if ! is_valid_hostname "${new_hostname}"; then
-  log "ERROR: invalid hostname: ${new_hostname}"
+  log "ERROR: invalid hostname after sanitize: ${new_hostname}"
   exit 1
 fi
 
@@ -126,12 +135,13 @@ changed_hosts="no"
 log "Current hostname: ${current_hostname}"
 log "Target hostname:  ${new_hostname}"
 
+# Apply hostname (idempotent)
 if [[ "${current_hostname}" != "${new_hostname}" ]]; then
   apply_or_echo "hostnamectl set-hostname ${new_hostname} || (echo ${new_hostname} > /etc/hostname; hostname ${new_hostname} || true)"
   changed_hostname="yes"
 fi
 
-# keep Ubuntu style 127.0.1.1 hostname updated
+# Ensure Ubuntu style 127.0.1.1 hostname line
 if grep -qE '^127\.0\.1\.1[[:space:]]+' /etc/hosts; then
   if ! grep -qE "^127\.0\.1\.1[[:space:]]+${new_hostname}(\$|[[:space:]])" /etc/hosts; then
     apply_or_echo "sed -i \"s/^127\\.0\\.1\\.1[[:space:]].*/127.0.1.1 ${new_hostname}/\" /etc/hosts"
@@ -142,7 +152,7 @@ else
   changed_hosts="yes"
 fi
 
-# managed block update (safe)
+# Managed hosts block update (safe)
 if [[ -n "${hosts_entries}" ]]; then
   update_managed_hosts "${hosts_entries}"
   changed_hosts="yes"
@@ -155,20 +165,25 @@ resolve_results=()
 ping_results=()
 tcp_results=()
 
+# DNS resolve + ping
 if [[ -n "${dns_names}" ]]; then
   IFS=',' read -r -a names <<< "${dns_names}"
   for name in "${names[@]}"; do
     name="$(echo "${name}" | xargs)" || true
     [[ -z "${name}" ]] && continue
+
     r="$(check_resolve "${name}")"
     p="$(check_ping "${name}")"
+
     resolve_results+=("${name}=$(echo "${r}" | tr '\n' ' ' | xargs)")
     ping_results+=("${name}=${p}")
+
     log "DNS: ${name} -> ${r:-<no result>}"
     log "PING: ${name} -> ${p}"
   done
 fi
 
+# Optional TCP checks (useful when ping blocked)
 if [[ -n "${tcp_targets}" ]]; then
   IFS=',' read -r -a tgs <<< "${tcp_targets}"
   for t in "${tgs[@]}"; do
